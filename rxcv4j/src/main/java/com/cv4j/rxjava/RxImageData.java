@@ -125,6 +125,7 @@ public class RxImageData {
     /**
      * 渲染imageview
      */
+    @SuppressWarnings("unchecked")
     private void render() {
 
         if (imageView == null) {
