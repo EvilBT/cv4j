@@ -3,106 +3,131 @@ package com.cv4j.core.binary;
 import com.cv4j.core.datamodel.ByteProcessor;
 import com.cv4j.core.datamodel.Line;
 
+import java.util.List;
+
 public class HoughLinesP {
-
-
-	public void process(ByteProcessor binary, Line[] lines, int numLines) {
+	/**
+	 * 1. 初始化霍夫变换空间
+	 * 2. 将图像的2D空间转换到霍夫空间,每个像素坐标都要转换到霍夫极坐标的对应强度值
+	 * 3. 找出霍夫极坐标空间的最大强度值
+	 * 4. 根据最大强度值归一化,范围为0 ~ 255
+	 * 5. 根据输入前accSize值,画出前accSize个信号最强的直线
+	 * @return
+	 */
+	public void process(ByteProcessor binary, List<Line> lines, int numLines, int accThreshold, boolean filterByThreshold) {
 		int width = binary.getWidth();
 		int height = binary.getHeight();
-		byte[] data = binary.getGray();
-		// 初始化霍夫空间,0, 179, 90
-		int p=0;
-		int offset = 0;
-		int[] hspace = new int[]{0, 1, 2, 89, 90, 91, 178, 179};
 		int rmax = (int) Math.sqrt(width * width + height * height);
-		int[] houghspace = new int[rmax * hspace.length];
-		// 建立查找表
-		double[] sinlut = setupSinLUT(); // new double[180];
-		double[] coslut = setupCosLUT(); // new double[180];
-		// 霍夫变换
-		int h1=0;
-		for (int row = 0; row < height; row++) {
-			offset = row * width;
-			for (int col = 0; col < width; col++) {
-				p=data[offset]&0xff;
-				if(p==255) {
-					for(int hs=0; hs<hspace.length; hs++) {
-						h1 = (int)(col*coslut[hspace[hs]] + row*sinlut[hspace[hs]]);
-						if ((h1 > 0) && (h1 <= rmax)) {
-							houghspace[h1*hspace.length+hs]++;
-						}
+		int[] acc = new int[rmax * 180]; // 0 ~ 180角度范围
+		int r;
+		byte[] input = binary.getGray();
+
+		for (int x = 0; x < width; x++) {
+			for (int y = 0; y < height; y++) {
+
+				if ((input[y * width + x] & 0xff) == 255) {
+
+					for (int theta = 0; theta < 180; theta++) {
+						r = (int) (x * Math.cos(((theta) * Math.PI) / 180) + y * Math.sin(((theta) * Math.PI) / 180)); // 计算出极坐标
+						if ((r > 0) && (r <= rmax))
+							acc[r * 180 + theta] = acc[r * 180 + theta] + 1; // 在斜率范围内的点，极坐标相同
 					}
 				}
-				offset++;
 			}
 		}
-		
-		// find first K lines
-		int[] result = new int[numLines*3];
+
+		// 寻找最大值
 		int max = 0;
-		for(int a=0; a<rmax; a++) {
-			for(int t=0; t<8; t++) {
-				int h = houghspace[a*hspace.length+t];
-				if(h > max) {
-					max = h;
-					result[3] = result[0];
-					result[4] = result[1];
-					result[5] = result[2];
-					
-					result[0] = max;
-					result[1] = hspace[t]; // 角度
-					result[2] = a; // 半径
+		for (r = 0; r < rmax; r++) {
+			for (int theta = 0; theta < 180; theta++) {
+
+				if (acc[r * 180 + theta] > max) {
+					// swap the max value
+					max = acc[r * 180 + theta];
 				}
 			}
 		}
-		
-		// draw detected lines
-		for (int row = 0; row < height; row++) {
-			offset = row * width;
-			for (int col = 0; col < width; col++) {
-				p=data[offset]&0xff;
-				if(p==255) {
-					for(int i=0; i<numLines; i++) {
-						h1 = (int)(col*coslut[result[i*3+1]] + row*sinlut[result[i*3+1]]);
-						if ((h1 - result[i*3+2]) == 0) {
-							data[offset] = (byte)255;
-							if(lines[i] == null) {
-								lines[i] = new Line();
-								lines[i].x1 = col;
-								lines[i].y1 = row;
-								lines[i].x2 = col;
-								lines[i].y2 = row;
-							}
-							if(lines[i].x1 > col && lines[i].y1>row) {
-								lines[i].x1 = col;
-								lines[i].y1 = row;
-							}
-							if(lines[i].x2 < col && lines[i].y2 < row ) {
-								lines[i].x2 = col;
-								lines[i].y2 = row;
-							}
+
+		// normalization all the values,
+		int value;
+		for (r = 0; r < rmax; r++) {
+			for (int theta = 0; theta < 180; theta++) {
+
+				value = (int) (((double) acc[r * 180 + theta] / (double) max) * 255.0);
+				acc[r * 180 + theta] = 0xff000000 | (value << 16 | value << 8 | value);
+			}
+		}
+
+		// 发现前N个信号最强的点，转换为平面坐标，得到直线
+		findMaxima(acc, lines, width, height, numLines);
+	}
+
+	private void findMaxima(int[] acc, List<Line> lines, int width, int height, int numLines) {
+
+		// 初始化
+		int rmax = (int) Math.sqrt(width * width + height * height);
+		int[] results = new int[numLines * 3];
+		// 开始寻找前N个最强信号点，记录极坐标坐标位置
+		for (int r = 0; r < rmax; r++) {
+			for (int theta = 0; theta < 180; theta++) {
+				int value = (acc[r * 180 + theta] & 0xff);
+
+				// if its higher than lowest value add it and then sort
+				if (value > results[(numLines - 1) * 3]) {
+
+					// add to bottom of array
+					results[(numLines - 1) * 3] = value;
+					results[(numLines - 1) * 3 + 1] = r;
+					results[(numLines - 1) * 3 + 2] = theta;
+
+					// shift up until its in right place
+					int i = (numLines - 2) * 3;
+					while ((i >= 0) && (results[i + 3] > results[i])) {
+						for (int j = 0; j < 3; j++) {
+							int temp = results[i + j];
+							results[i + j] = results[i + 3 + j];
+							results[i + 3 + j] = temp;
 						}
+						i = i - 3;
+						if (i < 0)
+							break;
 					}
 				}
-				offset++;
 			}
 		}
-	}
 
-	private double[] setupCosLUT() {
-		double[] coslut = new double[180];
-		for (int theta = 0; theta < 180; theta++) {
-			coslut[theta] = Math.cos((theta * Math.PI) / 180.0); 
+
+		// 绘制像素坐标
+		//System.out.println("Total " + numLines + " matches:");
+		for (int i = numLines - 1; i >= 0; i--) {
+			drawPolarLine(results[i * 3], results[i * 3 + 1],results[i * 3 + 2], lines, width, height);
 		}
-		return coslut;
 	}
 
-	private double[] setupSinLUT() {
-		double[] sinlut = new double[180];
-		for (int theta = 0; theta < 180; theta++) {
-			sinlut[theta] = Math.sin((theta * Math.PI) / 180.0); 
+	// 变换极坐标为平面坐标，并绘制
+	private void drawPolarLine(int value, int r, int theta, List<Line> lines, int width, int height) {
+		int x1 = 10000, y1 = 100000;
+		int x2 = 0, y2 = 0;
+		for (int x = 0; x < width; x++) {
+			for (int y = 0; y < height; y++) {
+				int temp = (int) (x * Math.cos(((theta) * Math.PI) / 180) + y * Math.sin(((theta) * Math.PI) / 180));
+				if ((temp - r) == 0) {// 变换坐标并绘制
+					if(x1 > x && y1 > y) {
+						x1 = x;
+						y1 = y;
+					}
+					if(x2 < x && y2 < y) {
+						x2 = x;
+						y2 = y;
+					}
+				}
+			}
 		}
-		return sinlut;
+		Line line = new Line();
+		line.x1 = x1;
+		line.y1 = y1;
+		line.x2 = x2;
+		line.y2 = y2;
+		lines.add(line);
 	}
-
 }

@@ -32,7 +32,7 @@ public class ConnectedAreaLabel {
 		this.filterNoise = filterNoise;
 	}
 
-	public int process(ByteProcessor binary, byte[] labelMask, List<Rect> rectangles, boolean drawBounding) {
+	public int process(ByteProcessor binary, int[] labelMask, List<Rect> rectangles, boolean drawBounding) {
 		int width = binary.getWidth();
 		int height = binary.getHeight();
 		byte[] data = binary.getGray();
@@ -147,8 +147,9 @@ public class ConnectedAreaLabel {
 
 		// assign labels
 		Integer[] keys = aggregationMap.keySet().toArray(new Integer[0]);
-		Arrays.fill(labelMask, (byte)0);
+		Arrays.fill(labelMask, -1);
 		List<PixelNode> pixelList = null;
+		int number = 0;
 		for(Integer key : keys) {
 			pixelList = aggregationMap.get(key);
 			if(filterNoise && pixelList.size() < numOfPixels) {
@@ -156,16 +157,17 @@ public class ConnectedAreaLabel {
 			}
 			// tag each pixel
 			for(PixelNode pnode : pixelList) {
-				labelMask[pnode.index] = (byte)key.intValue();
+				labelMask[pnode.index] = key.intValue();
 			}
 
 			// return each label rectangle
 			if(drawBounding && rectangles != null) {
 				rectangles.add(boundingRect(pixelList));
 			}
+			number++;
 		}
 
-		return keys.length;
+		return number;
 	}
 
 	/**
@@ -174,7 +176,7 @@ public class ConnectedAreaLabel {
 	 * @param labelMask - label for each pixel point
      * @return int - total labels of image
      */
-	public int process(ByteProcessor binary, byte[] labelMask) {
+	public int process(ByteProcessor binary, int[] labelMask) {
 		return process(binary, labelMask, null, false);
 	}
 
